@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <title>면접 도우미 (답변 비교 & 피드백)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- TailwindCSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 text-gray-900">
+  <div class="max-w-4xl mx-auto px-4 py-8">
+    <header class="mb-8">
+      <h1 class="text-3xl font-bold text-center text-blue-700">영종고 면접 도우미</h1>
+      <p class="text-center text-sm text-gray-600 mt-2">프롬프트는 화면에 노출되지 않으며, 질문은 5개로 생성됩니다.</p>
+    </header>
+
+    <!-- 입력 섹션 -->
+    <section class="grid md:grid-cols-2 gap-5">
+      <div class="bg-white rounded-2xl shadow p-5">
+        <label class="block font-semibold mb-2">OpenAI API Key</label>
+        <input id="apiKey" type="password" placeholder="sk-..." class="w-full p-3 border rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400">
+        <p class="text-xs text-gray-500 mt-2">키는 로컬에서만 사용됩니다.</p>
+      </div>
+
+      <div class="bg-white rounded-2xl shadow p-5">
+        <label class="block font-semibold mb-2">추가 요청 사항 (선택)</label>
+        <textarea id="extraPrompt" rows="3" placeholder="예: 전공적합성 질문을 2개 포함해주세요" class="w-full p-3 border rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400"></textarea>
+      </div>
+
+      <div class="md:col-span-2 bg-white rounded-2xl shadow p-5">
+        <label class="block font-semibold mb-2">과세특 입력</label>
+        <textarea id="studentRecord" rows="5" placeholder="생활기록부 과세특 주요 내용을 붙여넣어 주세요." class="w-full p-3 border rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400"></textarea>
+      </div>
+    </section>
+
+    <!-- 액션 -->
+    <div class="text-center my-6">
+      <button id="genBtn" class="px-6 py-3 bg-blue-600 text-white font-semibold rounded-xl shadow hover:bg-blue-700 transition">
+        질문 5개 생성하기
+      </button>
+    </div>
+
+    <!-- 결과 -->
+    <section id="resultArea" class="space-y-4"></section>
+  </div>
+
+  <script>
+    const state = {
+      questions: [],
+      answers: {},      // user answers keyed by index
+      gptAnswers: {},   // model answers keyed by index
+    };
+
+    const models = {
+      gen: "gpt-4o-mini",  // 질문/예시답변 생성
+      eval: "gpt-4o-mini", // 비교/평가
+    };
+
+    const hiddenPromptForQuestions = (extra) => `
+당신은 대학 입학 면접관입니다. 아래 수험생의 생활기록부(과세특)를 분석하여 심층 질문 5개를 작성하세요.
+조건:
+- 진정성 검증과 논리적 사고를 볼 수 있는 질문 위주
+- 자기주도성/협업/문제해결/전공적합성 중 최소 2가지 이상 반영
+- 문항만 간결히 출력(번호 포함), 불필요한 서술 금지
+추가 고려: ${extra || "해당 없음"}
+`;
+
+    const hiddenPromptForModelAnswer = `
+당신은 위 질문에 대해, 모범적인 수험생의 간략 예시 답변을 작성합니다.
+규칙:
+- 각 답변은 3~5문장
+- 사실관계는 일반적/가상의 무해한 범위로 구성
+- 과도한 수사 없이, 주장-근거-결론 흐름을 유지
+출력: 순수 답변 문장만.
+`;
+
+    const hiddenPromptForFeedback = `
+아래의 두 답변(사용자 답변, GPT 예시 답변)을 비교하여 "일관성"과 "논리성"에 초점을 맞춰 평가해 주세요.
+- 일관성(consistency): 주장과 사례/근거가 서로 모순 없이 이어지는가, 앞뒤가 맞는가
+- 논리성(logical coherence): 주장-근거-결론의 구조가 명확한가, 인과관계가 성립하는가
+- 톤, 길이, 화려함은 평가 요소가 아님
+
+출력 형식(JSON):
+{
+  "score_consistency": 0-5 정수,
+  "score_logic": 0-5 정수,
+  "summary": "핵심 관찰",
+  "strengths": ["2~4개 bullet"],
+  "improvements": ["2~4개 bullet"],
+  "action_points": ["개선 위해 바로 적용할 수 있는 2~3가지"]
+}
+JSON만 출력하세요.
+`;
+
+    const $ = (sel) => document.querySelector(sel);
+
+    $("#genBtn").addEventListener("click", generateQuestions);
+
+    async function generateQuestions() {
+      const apiKey = $("#apiKey").value.trim();
+      const record = $("#studentRecord").value.trim();
+      const extra = $("#extraPrompt").value.trim();
+      const resultArea = $("#resultArea");
+
+      resultArea.innerHTML = "";
+      if (!apiKey || !record) {
+        resultArea.innerHTML = msg("API Key와 과세특을 입력해주세요.", "error");
+        return;
+      }
+
+      resultArea.innerHTML = spinner("질문을 생성 중입니다...");
+
+      try {
+        const qRes = await openAI(apiKey, {
+          model: models.gen,
+          messages: [
+            { role: "system", content: hiddenPromptForQuestions(extra) },
+            { role: "user", content: record }
+          ],
+          temperature: 0.7
+        });
+
+        const raw = qRes?.choices?.[0]?.message?.content ?? "";
+        // 줄 단위 파싱 → 5개로 제한
+        let questions = raw.split(/\n+/)
+          .map(s => s.replace(/^\s*\d+\.\s*/, "").trim())
+          .filter(Boolean)
+          .slice(0, 5);
+
+        // 만약 5개 미만이면 보정
+        while (questions.length < 5) questions.push(`추가 질문 보정 ${questions.length + 1}`);
+
+        state.questions = questions;
+        state.answers = {};
+        state.gptAnswers = {};
+
+        renderQuestions();
+        resultArea.scrollIntoView({ behavior: "smooth", block: "start" });
+      } catch (e) {
+        console.error(e);
+        resultArea.innerHTML = msg("질문 생성 중 오류가 발생했습니다. 입력값과 API Key를 확인해주세요.", "error");
+      }
+    }
+
+    function renderQuestions() {
+      const resultArea = $("#resultArea");
+      if (!state.questions.length) {
+        resultArea.innerHTML = "";
+        return;
+      }
+
+      resultArea.innerHTML = state.questions.map((q, i) => questionCard(q, i)).join("");
+    }
+
+    function questionCard(q, i) {
+      const ua = state.answers[i] || "";
+      const ga = state.gptAnswers[i] || "";
+      return `
+        <div class="bg-white rounded-2xl shadow p-5">
+          <div class="flex items-start gap-3">
+            <div class="shrink-0 w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center font-bold text-blue-700">Q${i+1}</div>
+            <div class="flex-1">
+              <h3 class="font-semibold text-lg mb-2">${escapeHTML(q)}</h3>
+
+              <label class="block text-sm font-medium mb-1">내 답변</label>
+              <textarea id="ua-${i}" rows="4" class="w-full p-3 border rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400" placeholder="여기에 내 답변을 작성하세요.">${escapeHTML(ua)}</textarea>
+
+              <div class="flex flex-wrap gap-2 items-center mt-3">
+                <button onclick="getFeedback(${i})" class="px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700">피드백 받기</button>
+                <button onclick="clearAnswer(${i})" class="px-4 py-2 bg-gray-100 rounded-xl hover:bg-gray-200">지우기</button>
+              </div>
+
+              <div id="fb-${i}" class="mt-4 hidden"></div>
+
+              <details class="mt-3 group">
+                <summary class="cursor-pointer text-sm text-gray-600 hover:text-gray-800">GPT 예시 답변 보기</summary>
+                <div class="mt-2 p-3 bg-gray-50 border rounded-xl text-sm" id="ga-${i}">${ga ? escapeHTML(ga) : "아직 생성되지 않았습니다. 피드백 받기를 누르면 생성됩니다."}</div>
+              </details>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    async function getFeedback(i) {
+      const apiKey = $("#apiKey").value.trim();
+      const q = state.questions[i];
+      const ua = ($("#ua-" + i).value || "").trim();
+      const fbBox = $("#fb-" + i);
+      const gaBox = $("#ga-" + i);
+
+      if (!apiKey) {
+        toast("API Key가 필요합니다.");
+        return;
+      }
+      if (!ua) {
+        toast("내 답변을 먼저 작성해주세요.");
+        return;
+      }
+
+      fbBox.classList.remove("hidden");
+      fbBox.innerHTML = spinner("예시 답변 생성 및 비교 평가 중...");
+
+      try {
+        // 1) GPT 예시 답변 생성
+        const modelAnsRes = await openAI(apiKey, {
+          model: models.gen,
+          messages: [
+            { role: "system", content: hiddenPromptForModelAnswer },
+            { role: "user", content: `질문: ${q}` }
+          ],
+          temperature: 0.7
+        });
+        const ga = (modelAnsRes?.choices?.[0]?.message?.content || "").trim();
+        state.gptAnswers[i] = ga;
+        gaBox.textContent = ga || "예시 답변 생성 실패";
+
+        // 2) 비교/평가 (JSON)
+        const evalRes = await openAI(apiKey, {
+          model: models.eval,
+          messages: [
+            { role: "system", content: hiddenPromptForFeedback },
+            { role: "user", content: [
+              `질문: ${q}`,
+              `사용자 답변: ${ua}`,
+              `GPT 예시 답변: ${ga}`
+            ].join("\n") }
+          ],
+          temperature: 0
+        });
+
+        const raw = (evalRes?.choices?.[0]?.message?.content || "").trim();
+        const json = safeParseJSON(raw);
+
+        if (!json) {
+          fbBox.innerHTML = msg("피드백 형식이 올바르지 않습니다. 다시 시도해 주세요.", "error");
+          return;
+        }
+
+        fbBox.innerHTML = feedbackCard(json);
+      } catch (e) {
+        console.error(e);
+        fbBox.innerHTML = msg("피드백 생성 중 오류가 발생했습니다.", "error");
+      }
+    }
+
+    function clearAnswer(i) {
+      state.answers[i] = "";
+      const el = $("#ua-" + i);
+      if (el) el.value = "";
+      const fb = $("#fb-" + i);
+      if (fb) { fb.innerHTML = ""; fb.classList.add("hidden"); }
+    }
+
+    // ---------- UI helpers ----------
+    function msg(text, type="info") {
+      const color = type === "error" ? "red" : type === "success" ? "green" : "gray";
+      return `<div class="p-4 border rounded-xl bg-${color}-50 border-${color}-200 text-${color}-800 text-sm">${escapeHTML(text)}</div>`;
+    }
+
+    function spinner(text="로딩 중...") {
+      return `
+      <div class="flex items-center gap-3 text-sm text-gray-600">
+        <svg class="animate-spin h-5 w-5" viewBox="0 0 24 24" fill="none">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4A4 4 0 004 12z"></path>
+        </svg>
+        <span>${escapeHTML(text)}</span>
+      </div>`;
+    }
+
+    function feedbackCard(j) {
+      const badge = (label, val) => `
+        <div class="px-3 py-1 rounded-full bg-gray-100 text-gray-800 text-sm">
+          ${label}: <span class="font-semibold">${val}/5</span>
+        </div>`;
+      const li = (t) => `<li class="list-disc ml-5">${escapeHTML(t)}</li>`;
+
+      return `
+        <div class="p-4 rounded-xl border bg-white">
+          <div class="flex flex-wrap gap-2 mb-2">
+            ${badge("일관성", j.score_consistency ?? "?")}
+            ${badge("논리성", j.score_logic ?? "?")}
+          </div>
+          <p class="text-sm text-gray-700 mb-3"><strong>요약:</strong> ${escapeHTML(j.summary || "")}</p>
+
+          <div class="grid md:grid-cols-3 gap-4">
+            <div class="bg-gray-50 rounded-xl p-3">
+              <h4 class="font-semibold mb-2">강점</h4>
+              <ul class="space-y-1">${(j.strengths || []).map(li).join("")}</ul>
+            </div>
+            <div class="bg-gray-50 rounded-xl p-3">
+              <h4 class="font-semibold mb-2">개선점</h4>
+              <ul class="space-y-1">${(j.improvements || []).map(li).join("")}</ul>
+            </div>
+            <div class="bg-gray-50 rounded-xl p-3">
+              <h4 class="font-semibold mb-2">강화 포인트</h4>
+              <ul class="space-y-1">${(j.action_points || []).map(li).join("")}</ul>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function safeParseJSON(s) {
+      try {
+        // 일부 모델이 코드블록을 붙이는 경우 제거
+        const clean = s.replace(/```json|```/g, "").trim();
+        return JSON.parse(clean);
+      } catch { return null; }
+    }
+
+    function escapeHTML(str) {
+      return String(str ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll("\"", "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    // ---------- OpenAI Chat helper ----------
+    async function openAI(apiKey, body) {
+      const res = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          ...body,
+        })
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error("OpenAI API error: " + t);
+      }
+      return await res.json();
+    }
+  </script>
+</body>
+</html>
