@@ -1,0 +1,22 @@
+{
+  "name": "url-shortener-buly",
+  "version": "1.0.0",
+  "description": "URL shortener with QR code functionality using buly.kr API",
+  "main": "index.html",
+  "scripts": {
+    "dev": "vercel dev",
+    "deploy": "vercel --prod"
+  },
+  "keywords": [
+    "url-shortener",
+    "qr-code",
+    "buly",
+    "vercel",
+    "serverless"
+  ],
+  "author": "인천영종고 오희찬",
+  "license": "MIT",
+  "devDependencies": {
+    "vercel": "^32.0.0"
+  }
+}
