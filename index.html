@@ -105,29 +105,73 @@
     // URL 단축 + QR 생성
     shortenBtn.addEventListener('click', async () => {
       const url = longUrlInput.value.trim();
-      try { new URL(url); } catch { alert('올바른 URL을 입력하세요 (예: https://example.com)'); return; }
 
-      const resp = await fetch('/api/shorten', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ url })
-      });
-      if (!resp.ok) {
-        const t = await resp.text();
-        alert('단축 실패: ' + t);
+      // URL 유효성 검사
+      try {
+        new URL(url);
+      } catch {
+        alert('올바른 URL을 입력하세요 (예: https://example.com)');
         return;
       }
-      const data = await resp.json();
-      const shortUrl = data.short_url || data.url || '';
-      if (!shortUrl) { alert('API 응답에 short_url이 없습니다.'); return; }
 
-      shortUrlInput.value = shortUrl;
-      openShortLink.href = shortUrl;
-      originalUrl.value = url;
+      // 버튼 상태 변경
+      shortenBtn.disabled = true;
+      shortenBtn.textContent = '단축 중...';
 
-      qrcodeBox.innerHTML = '';
-      new QRCode(qrcodeBox, { text: shortUrl, width: 220, height: 220, correctLevel: QRCode.CorrectLevel.M });
-      resultBox.classList.remove('hidden');
+      try {
+        const resp = await fetch('/api/shorten', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ url })
+        });
+
+        if (!resp.ok) {
+          let errorMsg = '단축 실패';
+          try {
+            const errorData = await resp.json();
+            errorMsg = errorData.error || errorMsg;
+          } catch {
+            const textError = await resp.text();
+            errorMsg = textError || errorMsg;
+          }
+          alert(`단축 실패: ${errorMsg}`);
+          return;
+        }
+
+        const data = await resp.json();
+        const shortUrl = data.short_url || data.url || '';
+
+        if (!shortUrl) {
+          alert('API 응답에 short_url이 없습니다.');
+          return;
+        }
+
+        // 결과 표시
+        shortUrlInput.value = shortUrl;
+        openShortLink.href = shortUrl;
+        originalUrl.value = url;
+
+        // QR 코드 생성
+        qrcodeBox.innerHTML = '';
+        new QRCode(qrcodeBox, {
+          text: shortUrl,
+          width: 220,
+          height: 220,
+          correctLevel: QRCode.CorrectLevel.M
+        });
+
+        resultBox.classList.remove('hidden');
+
+      } catch (error) {
+        console.error('Error:', error);
+        alert('네트워크 오류가 발생했습니다. 다시 시도해 주세요.');
+      } finally {
+        // 버튼 상태 복원
+        shortenBtn.disabled = false;
+        shortenBtn.textContent = '단축 & QR 생성';
+      }
     });
 
     // 단축 URL 복사
