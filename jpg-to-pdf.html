@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>JPG → PDF 변환</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+</head>
+<body class="min-h-screen bg-gray-50 text-gray-900">
+  <div class="max-w-2xl mx-auto p-6">
+    <header class="flex items-center gap-3 mb-6">
+      <div class="w-8 h-8 bg-gradient-to-br from-gray-700 to-gray-900 rounded-lg flex items-center justify-center text-white font-bold text-sm">PDF</div>
+      <h1 class="text-2xl font-bold">JPG → PDF 변환기</h1>
+    </header>
+
+    <div id="form" class="bg-white rounded-2xl shadow p-6 space-y-4">
+      <div>
+        <label for="files" class="block font-medium mb-2">JPG/JPEG 파일 선택 (여러 장 가능)</label>
+        <input id="files" name="files" type="file"
+               accept=".jpg,.jpeg,image/jpeg" multiple
+               class="block w-full file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:bg-gray-900 file:text-white hover:file:bg-black file:cursor-pointer" />
+        <p class="text-sm text-gray-500 mt-2">여러 장 업로드 시 하나의 PDF로 합쳐집니다.</p>
+      </div>
+
+      <div id="preview" class="grid grid-cols-3 gap-3"></div>
+
+      <div class="space-y-3">
+        <div>
+          <label for="filename" class="block font-medium mb-2">파일명 (확장자 제외)</label>
+          <input id="filename" name="filename" type="text" placeholder="converted_files"
+                 class="w-full px-4 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-gray-900 focus:border-transparent" />
+          <p class="text-sm text-gray-500 mt-1">.pdf 확장자는 자동으로 추가됩니다</p>
+        </div>
+
+        <div>
+          <label class="block font-medium mb-2">변환 모드</label>
+          <div class="space-y-2">
+            <label class="flex items-center">
+              <input type="radio" name="mode" value="multi" checked
+                     class="mr-2 text-gray-900 focus:ring-gray-900">
+              <span>다중 페이지 PDF (모든 이미지를 하나의 PDF로)</span>
+            </label>
+            <label class="flex items-center">
+              <input type="radio" name="mode" value="single"
+                     class="mr-2 text-gray-900 focus:ring-gray-900">
+              <span>개별 PDF (이미지 1장당 PDF 1개씩 생성)</span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <button id="convertBtn" onclick="convertToPDF()"
+              class="w-full py-3 rounded-2xl bg-gray-900 text-white font-semibold hover:bg-black transition">
+        PDF로 변환
+      </button>
+    </div>
+
+    <p class="text-xs text-gray-500 mt-4">
+      모든 처리는 브라우저에서만 수행됩니다. 서버에 파일을 업로드하지 않습니다.
+    </p>
+  </div>
+
+  <script>
+    const filesInput = document.getElementById("files");
+    const preview = document.getElementById("preview");
+    const convertBtn = document.getElementById("convertBtn");
+
+    filesInput.addEventListener("change", () => {
+      preview.innerHTML = "";
+      const files = Array.from(filesInput.files || []);
+      files.forEach(file => {
+        const extOk = /\.(jpe?g)$/i.test(file.name);
+        if (!extOk || !file.type.startsWith('image/')) return;
+        const url = URL.createObjectURL(file);
+        const img = document.createElement("img");
+        img.src = url;
+        img.alt = file.name;
+        img.className = "w-full h-28 object-cover rounded-xl border";
+        preview.appendChild(img);
+      });
+    });
+
+    async function convertToPDF() {
+      const files = filesInput.files;
+      if (!files || files.length === 0) {
+        alert("파일을 선택해주세요.");
+        return;
+      }
+
+      convertBtn.disabled = true;
+      convertBtn.textContent = "변환 중...";
+
+      try {
+        const mode = document.querySelector('input[name="mode"]:checked').value;
+        const filename = document.getElementById('filename').value.trim() || 'converted_files';
+
+        if (mode === 'single') {
+          // 개별 PDF 생성
+          for (let i = 0; i < files.length; i++) {
+            await createSinglePDF(files[i], `${filename}_${i + 1}`);
+          }
+        } else {
+          // 다중 페이지 PDF 생성
+          await createMultiPagePDF(files, filename);
+        }
+      } catch (error) {
+        console.error('PDF 변환 오류:', error);
+        alert('PDF 변환 중 오류가 발생했습니다.');
+      } finally {
+        convertBtn.disabled = false;
+        convertBtn.textContent = "PDF로 변환";
+      }
+    }
+
+    async function createSinglePDF(file, filename) {
+      const pdfDoc = await PDFLib.PDFDocument.create();
+      const imageBytes = await file.arrayBuffer();
+
+      let image;
+      if (file.type === 'image/jpeg') {
+        image = await pdfDoc.embedJpg(imageBytes);
+      } else {
+        // Convert to canvas first, then to JPEG
+        const canvas = await imageToCanvas(file);
+        const jpegBytes = canvasToJpeg(canvas);
+        image = await pdfDoc.embedJpg(jpegBytes);
+      }
+
+      const page = pdfDoc.addPage();
+      const { width, height } = image.scale(1);
+
+      // Fit image to page while maintaining aspect ratio
+      const pageWidth = page.getWidth();
+      const pageHeight = page.getHeight();
+      const scale = Math.min(pageWidth / width, pageHeight / height);
+
+      page.drawImage(image, {
+        x: (pageWidth - width * scale) / 2,
+        y: (pageHeight - height * scale) / 2,
+        width: width * scale,
+        height: height * scale,
+      });
+
+      const pdfBytes = await pdfDoc.save();
+      downloadPDF(pdfBytes, `${filename}.pdf`);
+    }
+
+    async function createMultiPagePDF(files, filename) {
+      const pdfDoc = await PDFLib.PDFDocument.create();
+
+      for (let file of files) {
+        const imageBytes = await file.arrayBuffer();
+
+        let image;
+        if (file.type === 'image/jpeg') {
+          image = await pdfDoc.embedJpg(imageBytes);
+        } else {
+          const canvas = await imageToCanvas(file);
+          const jpegBytes = canvasToJpeg(canvas);
+          image = await pdfDoc.embedJpg(jpegBytes);
+        }
+
+        const page = pdfDoc.addPage();
+        const { width, height } = image.scale(1);
+
+        const pageWidth = page.getWidth();
+        const pageHeight = page.getHeight();
+        const scale = Math.min(pageWidth / width, pageHeight / height);
+
+        page.drawImage(image, {
+          x: (pageWidth - width * scale) / 2,
+          y: (pageHeight - height * scale) / 2,
+          width: width * scale,
+          height: height * scale,
+        });
+      }
+
+      const pdfBytes = await pdfDoc.save();
+      downloadPDF(pdfBytes, `${filename}.pdf`);
+    }
+
+    function imageToCanvas(file) {
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          canvas.width = img.width;
+          canvas.height = img.height;
+          ctx.drawImage(img, 0, 0);
+          resolve(canvas);
+        };
+        img.src = URL.createObjectURL(file);
+      });
+    }
+
+    function canvasToJpeg(canvas) {
+      const dataURL = canvas.toDataURL('image/jpeg', 0.9);
+      const base64 = dataURL.split(',')[1];
+      const binaryString = atob(base64);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      return bytes;
+    }
+
+    function downloadPDF(pdfBytes, filename) {
+      const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+  </script>
+</body>
+</html>
