@@ -104,7 +104,12 @@ JSON만 출력하세요.
 
       resultArea.innerHTML = "";
       if (!apiKey || !record) {
-        resultArea.innerHTML = msg("API Key와 과세특을 입력해주세요.", "error");
+        resultArea.innerHTML = msg("API Key와 과세특을 모두 입력해주세요.", "error");
+        return;
+      }
+
+      if (!apiKey.startsWith("sk-")) {
+        resultArea.innerHTML = msg("유효한 OpenAI API Key를 입력해주세요. (sk-로 시작해야 합니다)", "error");
         return;
       }
 
@@ -138,7 +143,15 @@ JSON만 출력하세요.
         resultArea.scrollIntoView({ behavior: "smooth", block: "start" });
       } catch (e) {
         console.error(e);
-        resultArea.innerHTML = msg("질문 생성 중 오류가 발생했습니다. 입력값과 API Key를 확인해주세요.", "error");
+        let errorMsg = "질문 생성 중 오류가 발생했습니다.";
+        if (e.message.includes("401")) {
+          errorMsg = "API Key가 유효하지 않습니다. 올바른 OpenAI API Key를 입력해주세요.";
+        } else if (e.message.includes("429")) {
+          errorMsg = "API 사용량이 초과되었습니다. 잠시 후 다시 시도해주세요.";
+        } else if (e.message.includes("network")) {
+          errorMsg = "네트워크 오류가 발생했습니다. 인터넷 연결을 확인해주세요.";
+        }
+        resultArea.innerHTML = msg(errorMsg, "error");
       }
     }
 
@@ -150,6 +163,16 @@ JSON만 출력하세요.
       }
 
       resultArea.innerHTML = state.questions.map((q, i) => questionCard(q, i)).join("");
+
+      // 입력 필드에 이벤트 리스너 추가
+      state.questions.forEach((_, i) => {
+        const input = $("#ua-" + i);
+        if (input) {
+          input.addEventListener('input', function() {
+            state.answers[i] = this.value;
+          });
+        }
+      });
     }
 
     function questionCard(q, i) {
@@ -163,7 +186,7 @@ JSON만 출력하세요.
               <h3 class="font-semibold text-lg mb-2">${escapeHTML(q)}</h3>
 
               <label class="block text-sm font-medium mb-1">내 답변</label>
-              <textarea id="ua-${i}" rows="4" class="w-full p-3 border rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400" placeholder="여기에 내 답변을 작성하세요.">${escapeHTML(ua)}</textarea>
+              <textarea id="ua-${i}" rows="4" class="w-full p-3 border rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400" placeholder="질문에 대한 답변을 자세히 작성해주세요. 구체적인 사례와 근거를 포함하면 더 나은 피드백을 받을 수 있습니다.">${escapeHTML(ua)}</textarea>
 
               <div class="flex flex-wrap gap-2 items-center mt-3">
                 <button onclick="getFeedback(${i})" class="px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700">피드백 받기</button>
@@ -185,16 +208,20 @@ JSON만 출력하세요.
     async function getFeedback(i) {
       const apiKey = $("#apiKey").value.trim();
       const q = state.questions[i];
-      const ua = ($("#ua-" + i).value || "").trim();
+      // 실시간으로 textarea에서 값을 가져옴
+      const uaInput = $("#ua-" + i);
+      const ua = (uaInput ? uaInput.value : "").trim();
+      // state도 업데이트
+      state.answers[i] = ua;
       const fbBox = $("#fb-" + i);
       const gaBox = $("#ga-" + i);
 
       if (!apiKey) {
-        toast("API Key가 필요합니다.");
+        alert("API Key가 필요합니다.");
         return;
       }
       if (!ua) {
-        toast("내 답변을 먼저 작성해주세요.");
+        alert("내 답변을 먼저 작성해주세요.");
         return;
       }
 
@@ -240,7 +267,15 @@ JSON만 출력하세요.
         fbBox.innerHTML = feedbackCard(json);
       } catch (e) {
         console.error(e);
-        fbBox.innerHTML = msg("피드백 생성 중 오류가 발생했습니다.", "error");
+        let errorMsg = "피드백 생성 중 오류가 발생했습니다.";
+        if (e.message.includes("401")) {
+          errorMsg = "API Key가 유효하지 않습니다. 올바른 OpenAI API Key를 입력해주세요.";
+        } else if (e.message.includes("429")) {
+          errorMsg = "API 사용량이 초과되었습니다. 잠시 후 다시 시도해주세요.";
+        } else if (e.message.includes("network")) {
+          errorMsg = "네트워크 오류가 발생했습니다. 인터넷 연결을 확인해주세요.";
+        }
+        fbBox.innerHTML = msg(errorMsg, "error");
       }
     }
 
