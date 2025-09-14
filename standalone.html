@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>URL 단축 & QR 도구 (Standalone)</title>
+  <!-- Tailwind -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- QR 생성 -->
+  <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+  <!-- ZXing (QR 디코딩) -->
+  <script src="https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/umd/index.min.js"></script>
+</head>
+<body class="min-h-screen bg-gray-50 text-gray-900">
+  <div class="max-w-3xl mx-auto p-6">
+    <header class="mb-8">
+      <h1 class="text-3xl font-bold">URL 단축 & QR 도구</h1>
+      <p class="text-gray-600">단축 URL 생성과 QR 코드 생성/해독을 한 번에! (Standalone 버전)</p>
+      <p class="text-sm text-gray-500 mt-2">Made by 인천영종고 오희찬</p>
+    </header>
+
+    <!-- 1) URL 단축 & QR 생성 -->
+    <section class="bg-white rounded-2xl shadow p-6 mb-8">
+      <h2 class="text-xl font-semibold mb-4">1) URL 단축 & QR 생성</h2>
+      <div class="flex gap-3 mb-4">
+        <input id="longUrl" type="url" placeholder="https://example.com/very/long/link"
+               class="flex-1 rounded-xl border px-4 py-3 outline-none focus:ring" />
+        <button id="shortenBtn"
+                class="rounded-xl px-5 py-3 bg-black text-white font-medium hover:opacity-90">
+          단축 & QR 생성
+        </button>
+      </div>
+
+      <div id="resultBox" class="hidden">
+        <div class="flex items-center gap-3 mb-4">
+          <input id="shortUrl" class="flex-1 rounded-xl border px-4 py-3" readonly />
+          <button id="copyShort"
+                  class="rounded-xl px-4 py-3 border font-medium hover:bg-gray-50">
+            복사
+          </button>
+          <a id="openShort" target="_blank"
+             class="rounded-xl px-4 py-3 border font-medium hover:bg-gray-50">열기</a>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div>
+            <h3 class="font-semibold mb-2">QR 코드</h3>
+            <div id="qrcode" class="p-4 border rounded-xl bg-white"></div>
+            <button id="downloadQR"
+                    class="mt-3 rounded-xl px-4 py-2 border hover:bg-gray-50">
+              QR 이미지 다운로드
+            </button>
+          </div>
+          <div>
+            <h3 class="font-semibold mb-2">원본 URL</h3>
+            <textarea id="originalUrl" class="w-full h-32 rounded-xl border p-3" readonly></textarea>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2) QR 이미지에서 링크 추출 -->
+    <section class="bg-white rounded-2xl shadow p-6">
+      <h2 class="text-xl font-semibold mb-4">2) QR 이미지에서 링크 추출</h2>
+      <input id="qrFile" type="file" accept="image/*"
+             class="mb-3 block w-full text-sm text-gray-700 file:mr-4 file:py-2 file:px-4
+                    file:rounded-full file:border-0 file:text-sm file:font-semibold
+                    file:bg-black file:text-white hover:file:opacity-90"/>
+      <div class="flex items-center gap-3 mb-3">
+        <button id="decodeBtn"
+                class="rounded-xl px-5 py-3 bg-black text-white font-medium hover:opacity-90">
+          QR 해독
+        </button>
+        <span id="decodeStatus" class="text-gray-500"></span>
+      </div>
+      <div class="flex items-center gap-3">
+        <input id="decodedLink" class="flex-1 rounded-xl border px-4 py-3" readonly placeholder="해독된 링크가 여기에 표시됩니다." />
+        <button id="copyDecoded" class="rounded-xl px-4 py-3 border font-medium hover:bg-gray-50">복사</button>
+      </div>
+    </section>
+
+    <!-- 3) 직접 QR 생성 -->
+    <section class="bg-white rounded-2xl shadow p-6 mt-8">
+      <h2 class="text-xl font-semibold mb-4">3) 직접 QR 생성</h2>
+      <div class="flex gap-3 mb-4">
+        <input id="directText" type="text" placeholder="QR로 변환할 텍스트 또는 URL을 입력하세요"
+               class="flex-1 rounded-xl border px-4 py-3 outline-none focus:ring" />
+        <button id="generateQR"
+                class="rounded-xl px-5 py-3 bg-blue-600 text-white font-medium hover:opacity-90">
+          QR 생성
+        </button>
+      </div>
+      <div id="directQRBox" class="hidden">
+        <div id="directQRCode" class="p-4 border rounded-xl bg-white mb-3"></div>
+        <button id="downloadDirectQR"
+                class="rounded-xl px-4 py-2 border hover:bg-gray-50">
+          QR 이미지 다운로드
+        </button>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    // 간단한 URL 단축 시뮬레이션 함수
+    function generateShortUrl(longUrl) {
+      const hash = btoa(longUrl).replace(/[^a-zA-Z0-9]/g, '').substring(0, 8);
+      return `https://short.ly/${hash}`;
+    }
+
+    // DOM 요소들
+    const shortenBtn = document.getElementById('shortenBtn');
+    const longUrlInput = document.getElementById('longUrl');
+    const resultBox = document.getElementById('resultBox');
+    const shortUrlInput = document.getElementById('shortUrl');
+    const copyShortBtn = document.getElementById('copyShort');
+    const openShortLink = document.getElementById('openShort');
+    const qrcodeBox = document.getElementById('qrcode');
+    const downloadQR = document.getElementById('downloadQR');
+    const originalUrl = document.getElementById('originalUrl');
+
+    const qrFile = document.getElementById('qrFile');
+    const decodeBtn = document.getElementById('decodeBtn');
+    const decodeStatus = document.getElementById('decodeStatus');
+    const decodedLink = document.getElementById('decodedLink');
+    const copyDecoded = document.getElementById('copyDecoded');
+
+    const directText = document.getElementById('directText');
+    const generateQRBtn = document.getElementById('generateQR');
+    const directQRBox = document.getElementById('directQRBox');
+    const directQRCode = document.getElementById('directQRCode');
+    const downloadDirectQR = document.getElementById('downloadDirectQR');
+
+    // URL 단축 + QR 생성 (시뮬레이션)
+    shortenBtn.addEventListener('click', async () => {
+      const url = longUrlInput.value.trim();
+
+      // URL 유효성 검사
+      try {
+        new URL(url);
+      } catch {
+        alert('올바른 URL을 입력하세요 (예: https://example.com)');
+        return;
+      }
+
+      // 단축 URL 생성 (시뮬레이션)
+      const shortUrl = generateShortUrl(url);
+
+      shortUrlInput.value = shortUrl;
+      openShortLink.href = url; // 실제로는 원본 URL로 연결
+      originalUrl.value = url;
+
+      // QR 코드 생성
+      qrcodeBox.innerHTML = '';
+      new QRCode(qrcodeBox, {
+        text: shortUrl,
+        width: 220,
+        height: 220,
+        correctLevel: QRCode.CorrectLevel.M
+      });
+
+      resultBox.classList.remove('hidden');
+    });
+
+    // 단축 URL 복사
+    copyShortBtn.addEventListener('click', async () => {
+      if (!shortUrlInput.value) return;
+      try {
+        await navigator.clipboard.writeText(shortUrlInput.value);
+        copyShortBtn.textContent = '복사됨!';
+        setTimeout(() => copyShortBtn.textContent = '복사', 1200);
+      } catch (err) {
+        // 클립보드 API 실패시 fallback
+        shortUrlInput.select();
+        document.execCommand('copy');
+        copyShortBtn.textContent = '복사됨!';
+        setTimeout(() => copyShortBtn.textContent = '복사', 1200);
+      }
+    });
+
+    // QR 다운로드
+    downloadQR.addEventListener('click', () => {
+      const img = qrcodeBox.querySelector('img') || qrcodeBox.querySelector('canvas');
+      if (!img) return;
+
+      const dataUrl = img.tagName === 'IMG' ? img.src : img.toDataURL('image/png');
+      const a = document.createElement('a');
+      a.href = dataUrl;
+      a.download = 'qrcode.png';
+      a.click();
+    });
+
+    // QR 이미지 해독
+    decodeBtn.addEventListener('click', async () => {
+      if (!qrFile.files?.length) {
+        alert('QR 이미지 파일을 선택하세요.');
+        return;
+      }
+
+      decodeStatus.textContent = '해독 중...';
+
+      try {
+        const codeReader = new ZXingBrowser.BrowserQRCodeReader();
+        const file = qrFile.files[0];
+        const imgUrl = URL.createObjectURL(file);
+        const result = await codeReader.decodeFromImageUrl(imgUrl);
+
+        decodedLink.value = result.text || '';
+        decodeStatus.textContent = decodedLink.value ? '해독 완료' : '링크를 찾지 못했습니다.';
+
+        URL.revokeObjectURL(imgUrl); // 메모리 정리
+      } catch (e) {
+        console.error(e);
+        decodeStatus.textContent = '해독 실패';
+        alert('QR 해독에 실패했습니다. 다른 이미지를 시도해 보세요.');
+      }
+    });
+
+    // 해독 링크 복사
+    copyDecoded.addEventListener('click', async () => {
+      if (!decodedLink.value) return;
+
+      try {
+        await navigator.clipboard.writeText(decodedLink.value);
+        copyDecoded.textContent = '복사됨!';
+        setTimeout(() => copyDecoded.textContent = '복사', 1200);
+      } catch (err) {
+        decodedLink.select();
+        document.execCommand('copy');
+        copyDecoded.textContent = '복사됨!';
+        setTimeout(() => copyDecoded.textContent = '복사', 1200);
+      }
+    });
+
+    // 직접 QR 생성
+    generateQRBtn.addEventListener('click', () => {
+      const text = directText.value.trim();
+      if (!text) {
+        alert('QR로 변환할 텍스트를 입력하세요.');
+        return;
+      }
+
+      directQRCode.innerHTML = '';
+      new QRCode(directQRCode, {
+        text: text,
+        width: 220,
+        height: 220,
+        correctLevel: QRCode.CorrectLevel.M
+      });
+
+      directQRBox.classList.remove('hidden');
+    });
+
+    // 직접 생성한 QR 다운로드
+    downloadDirectQR.addEventListener('click', () => {
+      const img = directQRCode.querySelector('img') || directQRCode.querySelector('canvas');
+      if (!img) return;
+
+      const dataUrl = img.tagName === 'IMG' ? img.src : img.toDataURL('image/png');
+      const a = document.createElement('a');
+      a.href = dataUrl;
+      a.download = 'direct-qrcode.png';
+      a.click();
+    });
+
+    // Enter 키 이벤트
+    longUrlInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') shortenBtn.click();
+    });
+
+    directText.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') generateQRBtn.click();
+    });
+  </script>
+
+  <!-- Footer -->
+  <footer class="text-center py-8 text-gray-500">
+    <p>&copy; 2024 URL 단축 & QR 도구 | Made by 인천영종고 오희찬</p>
+  </footer>
+</body>
+</html>
